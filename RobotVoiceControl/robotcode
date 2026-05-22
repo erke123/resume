@@ -265,7 +265,6 @@ turnSpeed=constrain((int)(motorSpeed*0.85f),0,255);
 server.send(200,"text/plain","Speed:"+String(motorSpeed)); } else
 server.send(400,"text/plain","Missing"); }
 
-
 void testMotors() {
 Serial.println("\n=== TESTING MOTORS ===");
 delay(500);
