@@ -1,0 +1,302 @@
+#include <WiFi.h>
+#include <WebServer.h>
+const char* ssid = "ESP32_Robot";
+const char* password = "12345678";
+WebServer server(80);
+// ===== L298N пины =====
+const int ENA= 25;
+const int IN1=18;
+const int IN2=19;
+const int ENB=23; 
+const int IN3=21; 
+const int IN4=22;
+// ENA=25, IN1=18, IN2=19, IN3=21, IN4=22, ENB=32 (или 33)
+int motorSpeed=200;
+int turnSpeed=180;
+const unsigned long TURN_90_MS = 900;
+unsigned long lastCmdTime = 0;
+const unsigned long AUTO_STOP_MS = 5000;
+bool isMoving = false;
+enum PatternStep {
+STEP_IDLE,
+STEP_FORWARD,
+STEP_BACK,
+STEP_LEFT,
+STEP_RIGHT,
+STEP_STOP_PAUSE
+};
+struct Step {
+PatternStep action;
+unsigned long durationMs;
+};
+const int MAX_STEPS = 40;
+Step patternSteps[MAX_STEPS];
+int patternLength = 0;
+int patternIndex = 0;
+bool patternRunning = false;
+unsigned long stepStartTime = 0;
+
+void setMotorSpeed(int left, int right) {
+left = constrain(left, 0, 255);
+right = constrain(right, 0, 255);
+analogWrite(ENA, left);
+analogWrite(ENB, right);
+}
+
+
+void motorStop() {
+digitalWrite(IN1, LOW); digitalWrite(IN2, LOW);
+digitalWrite(IN3, LOW); digitalWrite(IN4, LOW);
+setMotorSpeed(0, 0);
+isMoving = false;
+Serial.println("STOP");
+}
+void motorForward(int spd) {
+digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+setMotorSpeed(spd, spd);
+isMoving = true;
+lastCmdTime = millis();
+Serial.println("FORWARD");
+}
+void motorBack(int spd) {
+digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);
+digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
+setMotorSpeed(spd, spd);
+isMoving = true;
+lastCmdTime = millis();
+Serial.println("BACK");
+}
+void motorLeft(int spd) {
+digitalWrite(IN1, LOW); digitalWrite(IN2, HIGH);digitalWrite(IN3, HIGH); digitalWrite(IN4, LOW);
+setMotorSpeed(spd, spd);
+isMoving = true;
+lastCmdTime = millis();
+Serial.println("LEFT");
+}
+void motorRight(int spd) {
+digitalWrite(IN1, HIGH); digitalWrite(IN2, LOW);
+digitalWrite(IN3, LOW); digitalWrite(IN4, HIGH);
+setMotorSpeed(spd, spd);
+isMoving = true;
+lastCmdTime = millis();
+Serial.println("RIGHT");
+}
+void executeStep(PatternStep action) {
+switch (action) {
+case STEP_FORWARD: motorForward(motorSpeed); break;
+case STEP_BACK: motorBack(motorSpeed); break;
+case STEP_LEFT: motorLeft(turnSpeed); break;
+case STEP_RIGHT: motorRight(turnSpeed); break;
+case STEP_STOP_PAUSE: motorStop(); break;
+default: break;
+}
+}
+void startPattern(Step* steps, int length) {patternRunning = false;
+motorStop();
+memcpy(patternSteps, steps, sizeof(Step) * length);
+patternLength = length;
+patternIndex = 0;
+patternRunning = true;
+stepStartTime = millis();
+executeStep(patternSteps[0].action);
+}
+void updatePattern() {
+if (!patternRunning) return;
+if (millis() - stepStartTime >= patternSteps[patternIndex].durationMs) {
+patternIndex++;
+if (patternIndex >= patternLength) {
+patternRunning = false;
+motorStop();
+return;
+}
+stepStartTime = millis();
+executeStep(patternSteps[patternIndex].action);
+}
+}
+void buildDance() {
+Step s[] = {
+{STEP_LEFT, 350}, {STEP_RIGHT, 350},
+{STEP_LEFT, 350}, {STEP_RIGHT, 350},
+{STEP_LEFT, 350}, {STEP_RIGHT, 350},{STEP_FORWARD, 500}, {STEP_BACK, 500},
+{STEP_FORWARD, 500}, {STEP_BACK, 500},
+{STEP_LEFT, (unsigned long)(TURN_90_MS * 2)},
+{STEP_STOP_PAUSE, 200},
+};
+startPattern(s, 12);
+}
+void buildSquare() {
+Step s[] = {
+{STEP_FORWARD, 800}, {STEP_STOP_PAUSE, 100},
+{STEP_RIGHT, TURN_90_MS}, {STEP_STOP_PAUSE, 100},
+{STEP_FORWARD, 800}, {STEP_STOP_PAUSE, 100},
+{STEP_RIGHT, TURN_90_MS}, {STEP_STOP_PAUSE, 100},
+{STEP_FORWARD, 800}, {STEP_STOP_PAUSE, 100},
+{STEP_RIGHT, TURN_90_MS}, {STEP_STOP_PAUSE, 100},
+{STEP_FORWARD, 800}, {STEP_STOP_PAUSE, 100},
+{STEP_RIGHT, TURN_90_MS}, {STEP_STOP_PAUSE, 200},
+};
+startPattern(s, 16);
+}
+void buildTriangle() {
+unsigned long turn120 = (TURN_90_MS * 4) / 3;
+Step s[] = {
+{STEP_FORWARD, 900}, {STEP_STOP_PAUSE, 100},
+{STEP_RIGHT, turn120}, {STEP_STOP_PAUSE, 100},
+{STEP_FORWARD, 900}, {STEP_STOP_PAUSE, 100},
+{STEP_RIGHT, turn120}, {STEP_STOP_PAUSE, 100},{STEP_FORWARD, 900}, {STEP_STOP_PAUSE, 100},
+{STEP_RIGHT, turn120}, {STEP_STOP_PAUSE, 200},
+};
+startPattern(s, 12);
+}
+void buildZigzag() {
+Step s[] = {
+{STEP_FORWARD, 700}, {STEP_LEFT, 250},
+{STEP_FORWARD, 700}, {STEP_RIGHT, 250},
+{STEP_FORWARD, 700}, {STEP_LEFT, 250},
+{STEP_FORWARD, 700}, {STEP_RIGHT, 250},
+{STEP_FORWARD, 700}, {STEP_STOP_PAUSE, 200},
+};
+startPattern(s, 10);
+}
+
+const char PAGE[] PROGMEM = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ESP32 Robot</title>
+<style>
+body { font-family: Arial; text-align: center; background: #1a1a2e; color: white; padding:
+20px; }
+.card { background: #16213e; border-radius: 20px; padding: 20px; max-width: 450px;
+margin: auto; }button { padding: 12px 20px; margin: 5px; font-size: 16px; border: none; border-radius:
+10px; cursor: pointer; }
+.btn-blue { background: #0f3460; color: white; }
+.btn-green { background: #1b5e20; color: white; }
+.btn-stop { background: #b71c1c; color: white; }
+.mic-btn { width: 80px; height: 80px; border-radius: 50%; font-size: 40px; background:
+#e94560; }
+.mic-btn.listening { animation: pulse 1s infinite; }
+@keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.1); } 100% {
+transform: scale(1); } }
+.status { background: #0f3460; padding: 10px; border-radius: 10px; margin: 10px 0; }
+input { width: 80%; margin: 10px 0; }
+</style>
+</head>
+<body>
+<div class="card">
+<h2> ESP32 Robot</h2>
+<div class="status">
+<div>Heard: <span id="heard">-</span></div>
+<div>Status: <span id="statusTxt">Ready</span></div>
+</div>
+<button id="micBtn" class="mic-btn" onclick="toggleVoice()"> </button>
+<div>
+<input type="range" id="speed" min="0" max="255" value="200"
+oninput="setSpeed(this.value)">
+<span>Speed: <span id="speedVal">200</span></span>
+</div>
+<div>
+<button class="btn-blue" onclick="cmd('/forward')"> Forward</button>
+<button class="btn-blue" onclick="cmd('/back')"> Back</button><button class="btn-blue" onclick="cmd('/left')"> Left 90°</button>
+<button class="btn-blue" onclick="cmd('/right')"> Right 90°</button>
+<button class="btn-green" onclick="cmd('/dance')"> Dance</button>
+<button class="btn-green" onclick="cmd('/square')"> Square</button>
+<button class="btn-green" onclick="cmd('/triangle')"> Triangle</button>
+<button class="btn-green" onclick="cmd('/zigzag')">〰 Zigzag</button>
+<button class="btn-stop" onclick="cmd('/stop')"> STOP</button>
+</div>
+</div>
+<script>
+let recognition, listening = false;
+function cmd(url) {
+fetch(url).then(r=>r.text()).then(t=>document.getElementById("statusTxt").innerText=t); }
+function setSpeed(val) { document.getElementById("speedVal").innerText = val;
+fetch('/setspeed?value='+val); }
+function toggleVoice() { if(listening) stopVoice(); else startVoice(); }
+function startVoice() {
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+if(!SR){ alert("Use Chrome!"); return; }
+recognition = new SR();
+recognition.lang = 'en-US';
+recognition.continuous = true;
+recognition.onstart = () => { listening=true;
+document.getElementById("micBtn").classList.add("listening"); };
+recognition.onresult = (e) => {
+let text = e.results[e.results.length-1][0].transcript.toLowerCase();
+document.getElementById("heard").innerText = text;
+if(text.includes("go")||text.includes("forward")) cmd('/forward');
+else if(text.includes("back")) cmd('/back');
+else if(text.includes("left")) cmd('/left');else if(text.includes("right")) cmd('/right');
+else if(text.includes("stop")) cmd('/stop');
+else if(text.includes("dance")) cmd('/dance');
+else if(text.includes("square")) cmd('/square');
+else if(text.includes("triangle")) cmd('/triangle');
+else if(text.includes("zigzag")) cmd('/zigzag');
+};
+recognition.onend = () => { if(listening) recognition.start(); };
+recognition.start();
+}
+function stopVoice() { listening=false; if(recognition) recognition.stop();
+document.getElementById("micBtn").classList.remove("listening"); }
+</script>
+</body>
+</html>
+)rawliteral";
+
+void handleRoot() { server.send_P(200, "text/html", PAGE); }
+void handleForward() { patternRunning=false; motorForward(motorSpeed);
+server.send(200,"text/plain","Forward"); }
+void handleBack() { patternRunning=false; motorBack(motorSpeed);
+server.send(200,"text/plain","Back"); }
+void handleLeft() { Step s[]={{STEP_LEFT,TURN_90_MS},{STEP_STOP_PAUSE,80}};
+startPattern(s,2); server.send(200,"text/plain","Left 90°"); }
+void handleRight() { Step s[]={{STEP_RIGHT,TURN_90_MS},{STEP_STOP_PAUSE,80}};
+startPattern(s,2); server.send(200,"text/plain","Right 90°"); }
+void handleStop() { patternRunning=false; motorStop(); server.send(200,"text/plain","Stop");
+}
+void handleDance() { buildDance(); server.send(200,"text/plain","Dance!"); }
+void handleSquare() { buildSquare(); server.send(200,"text/plain","Square!"); }void handleTriangle() { buildTriangle(); server.send(200,"text/plain","Triangle!"); }
+void handleZigzag() { buildZigzag(); server.send(200,"text/plain","Zigzag!"); }
+void handleSetSpeed() { if(server.hasArg("value")){
+motorSpeed=constrain(server.arg("value").toInt(),0,255);
+turnSpeed=constrain((int)(motorSpeed*0.85f),0,255);
+server.send(200,"text/plain","Speed:"+String(motorSpeed)); } else
+server.send(400,"text/plain","Missing"); }
+
+
+void testMotors() {
+Serial.println("\n=== TESTING MOTORS ===");
+delay(500);
+Serial.println("Forward 1 sec"); motorForward(180); delay(1000); motorStop(); delay(500);
+Serial.println("Back 1 sec"); motorBack(180); delay(1000); motorStop(); delay(500);
+Serial.println("Left 1 sec"); motorLeft(180); delay(1000); motorStop(); delay(500);
+Serial.println("Right 1 sec"); motorRight(180); delay(1000); motorStop();
+Serial.println("=== TEST COMPLETE ===");
+}
+
+void setup() {
+Serial.begin(115200);
+Serial.println("\n=== ESP32 ROBOT STARTING ===");
+pinMode(ENA, OUTPUT); pinMode(IN1, OUTPUT); pinMode(IN2, OUTPUT);
+pinMode(IN3, OUTPUT); pinMode(IN4, OUTPUT); pinMode(ENB, OUTPUT);
+motorStop();
+testMotors(); // Если моторы не крутятся - проверьте подключение!WiFi.softAP(ssid, password);
+Serial.print("WiFi IP: "); Serial.println(WiFi.softAPIP());
+server.on("/", handleRoot); server.on("/forward", handleForward);
+server.on("/back", handleBack); server.on("/left", handleLeft);
+server.on("/right", handleRight); server.on("/stop", handleStop);
+server.on("/dance", handleDance); server.on("/square", handleSquare);
+server.on("/triangle", handleTriangle); server.on("/zigzag", handleZigzag);
+server.on("/setspeed", handleSetSpeed);
+server.begin();
+lastCmdTime = millis();
+Serial.println("Ready! Connect to ESP32_Robot");
+}
+void loop() {
+server.handleClient();
+updatePattern();
+if(!patternRunning && isMoving && millis()-lastCmdTime>AUTO_STOP_MS) motorStop();
+delay(10);
+}
